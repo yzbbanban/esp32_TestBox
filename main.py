@@ -1,47 +1,95 @@
-import machine
-import neopixel
+# main.py
 import time
+import network
+import json
+from machine import Pin, SPI
+import dht
+import ssd1306
+import config
+from umqtt.simple import MQTTClient
 
-# --- 1. 硬件初始化 ---
-# 这块 ESP32-S3 开发板的板载 RGB 灯通常连接在 GPIO 48
-LED_PIN = 48
-pin = machine.Pin(LED_PIN, machine.Pin.OUT)
+# ==========================================
+# 1. 硬件初始化区域
+# ==========================================
+dht_sensor = dht.DHT11(Pin(4))
+spi = SPI(1, baudrate=8000000, sck=Pin(12), mosi=Pin(11))
+oled = ssd1306.SSD1306_SPI(128, 64, spi, Pin(9), Pin(10), Pin(8))
 
-# 初始化 NeoPixel 对象，1 代表只有 1 颗灯珠
-np = neopixel.NeoPixel(pin, 1)
 
-print("--- 开始板载 RGB 灯测试 ---")
+# ==========================================
+# 2. 网络连接函数
+# ==========================================
+def connect_wifi():
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    if not wlan.isconnected():
+        oled.fill(0)
+        oled.text("Connecting WiFi...", 0, 25, 1)
+        oled.show()
+        print("正在连接 WiFi...")
+        wlan.connect(config.WIFI_SSID, config.WIFI_PASS)
+        while not wlan.isconnected():
+            time.sleep(0.5)
+    ip = wlan.ifconfig()[0]
+    print(f"WiFi 成功! IP: {ip}")
+    return ip
 
-# --- 2. 控制逻辑 ---
-try:
+
+# ==========================================
+# 3. 核心业务主循环
+# ==========================================
+def main():
+    ip = connect_wifi()
+    sys_config = config.DEFAULT_CONFIG.copy()
+
+    # 建立 MQTT 连接
+    try:
+        oled.fill(0)
+        oled.text("Connecting MQTT...", 0, 25, 1)
+        oled.show()
+
+        mqtt = MQTTClient(config.MQTT_CLIENT_ID, config.MQTT_BROKER)
+        mqtt.connect()
+        print("MQTT 连接成功！")
+    except Exception as e:
+        print("MQTT 连接失败:", e)
+        oled.fill(0)
+        oled.text("MQTT Error!", 0, 25, 1)
+        oled.show()
+        time.sleep(2)
+        return  # 连接失败则重启或退出
+
     while True:
-        # 设置为红色 (R, G, B)，数值范围 0-255
-        # 注意：不要设置太高（比如255），会非常刺眼！20就足够亮了。
-        np[0] = (20, 0, 0)
-        np.write()  # 必须调用 write() 才会生效
-        print("状态: 红色亮起")
-        time.sleep(1)
+        try:
+            # 1. 采集物理数据
+            dht_sensor.measure()
+            t = dht_sensor.temperature()
+            h = dht_sensor.humidity()
 
-        # 设置为绿色
-        np[0] = (0, 20, 0)
-        np.write()
-        print("状态: 绿色亮起")
-        time.sleep(1)
+            # 2. 刷新屏幕
+            oled.fill(0)
+            oled.text("--- Smart Box ---", 0, 0, 1)
+            oled.text(f"Temp: {t} C", 0, 18, 1)
+            oled.text(f"Hum:  {h} %", 0, 34, 1)
 
-        # 设置为蓝色
-        np[0] = (0, 0, 20)
-        np.write()
-        print("状态: 蓝色亮起")
-        time.sleep(1)
+            if t > sys_config.get("t_max", 30):
+                oled.text("WARN: TOO HOT!", 0, 52, 1)
+            elif h < sys_config.get("h_min", 40):
+                oled.text("WARN: TOO DRY!", 0, 52, 1)
+            else:
+                oled.text(ip, 4, 52, 1)
+            oled.show()
 
-        # 熄灭
-        np[0] = (0, 0, 0)
-        np.write()
-        print("状态: 熄灭")
-        time.sleep(1)
+            # 3. 通过 MQTT 上报 JSON 数据
+            payload = json.dumps({"temperature": t, "humidity": h})
+            mqtt.publish(b"testbox/data", payload.encode())
+            print(f"[MQTT 上报] {payload}")
 
-except KeyboardInterrupt:
-    # 捕获停止命令，确保程序退出时灯是灭的
-    np[0] = (0, 0, 0)
-    np.write()
-    print("测试结束，灯已熄灭")
+        except Exception as e:
+            print("循环发生错误:", e)
+
+        time.sleep(2)
+
+
+if __name__ == '__main__':
+    main()
