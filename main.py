@@ -7,6 +7,7 @@ import dht
 import ssd1306
 import config
 from umqtt.simple import MQTTClient
+import ntptime
 
 # ==========================================
 # 1. 硬件初始化区域
@@ -14,6 +15,21 @@ from umqtt.simple import MQTTClient
 dht_sensor = dht.DHT11(Pin(4))
 spi = SPI(1, baudrate=8000000, sck=Pin(12), mosi=Pin(11))
 oled = ssd1306.SSD1306_SPI(128, 64, spi, Pin(9), Pin(10), Pin(8))
+
+
+def sync_ntp_time():
+    # 强制指定阿里云 NTP 服务器的 IP 地址，防止 DNS 解析失败
+    ntptime.host = "203.107.6.88"
+    for i in range(5):
+        try:
+            print(f"正在尝试同步网络时间 (第 {i + 1} 次)...")
+            ntptime.settime()  # 尝试校准 UTC 时间
+            print("NTP 时间同步成功！")
+            return True
+        except Exception as e:
+            print("同步失败，重试中...", e)
+            time.sleep(1)
+    return False
 
 
 # ==========================================
@@ -66,9 +82,17 @@ def main():
             t = dht_sensor.temperature()
             h = dht_sensor.humidity()
 
+            time_str = "{:02d}:{:02d}:{:02d}".format(0, 0, 0)
+            if sync_ntp_time():
+                # 2. 成功后获取北京时间并加上 8 小时偏移
+                beijing_timestamp = time.time() + 8 * 3600
+                t_now = time.localtime(beijing_timestamp)
+                time_str = "{:02d}:{:02d}:{:02d}".format(t_now[3], t_now[4], t_now[5])
+                print("当前北京时间:", time_str)
+
             # 2. 刷新屏幕
             oled.fill(0)
-            oled.text("--- Smart Box ---", 0, 0, 1)
+            oled.text(f"Time: {time_str}", 0, 0, 1)
             oled.text(f"Temp: {t} C", 0, 18, 1)
             oled.text(f"Hum:  {h} %", 0, 34, 1)
 
@@ -88,7 +112,7 @@ def main():
         except Exception as e:
             print("循环发生错误:", e)
 
-        time.sleep(2)
+        time.sleep(1)
 
 
 if __name__ == '__main__':
