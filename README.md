@@ -109,3 +109,8 @@ if __name__ == '__main__':
         if temperature is not None:
             print(f"[环境监控] 温度: {temperature:.2f} °C  |  湿度: {humidity:.2f} %")
         time.sleep(2)
+
+
+
+启动 mqtt_broder. py
+启动 server_bridge. py
